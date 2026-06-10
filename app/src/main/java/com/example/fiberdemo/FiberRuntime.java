@@ -156,10 +156,25 @@ public final class FiberRuntime {
         try {
             JSONObject params = new JSONObject()
                     .put("pubkey", requireTrimmed(pubkey, "pubkey"))
-                    .put("funding_amount", decimalAmountToHex(amount));
+                    .put("funding_amount", ckbAmountToShannonsHex(amount));
             return NativeResult.fromPrefixed(nativeOpenChannel(params.toString()));
         } catch (JSONException | IllegalArgumentException exception) {
             return NativeResult.error("Fiber createChannel failed: " + exception.getMessage());
+        }
+    }
+
+    public static synchronized NativeResult shutdownChannel(String channelId) {
+        String loadError = ensureNativeLibrariesLoaded();
+        if (loadError != null) {
+            return NativeResult.error(loadError);
+        }
+        try {
+            JSONObject params = new JSONObject()
+                    .put("channel_id", requireTrimmed(channelId, "channel_id"))
+                    .put("force", true);
+            return NativeResult.fromPrefixed(nativeShutdownChannel(params.toString()));
+        } catch (JSONException | IllegalArgumentException exception) {
+            return NativeResult.error("Fiber shutdownChannel failed: " + exception.getMessage());
         }
     }
 
@@ -526,12 +541,19 @@ public final class FiberRuntime {
         return value.trim();
     }
 
-    private static String decimalAmountToHex(String value) {
+    private static String ckbAmountToShannonsHex(String value) {
         String trimmed = requireTrimmed(value, "amount");
-        if (!trimmed.matches("[0-9]+")) {
-            throw new IllegalArgumentException("amount must be a decimal integer");
+        if (!trimmed.matches("[0-9]+(\\.[0-9]{1,8})?")) {
+            throw new IllegalArgumentException("amount must be a decimal CKB amount with up to 8 fractional digits");
         }
-        BigInteger amount = new BigInteger(trimmed, 10);
+        String[] parts = trimmed.split("\\.", -1);
+        BigInteger whole = new BigInteger(parts[0], 10);
+        BigInteger fractional = BigInteger.ZERO;
+        if (parts.length == 2) {
+            String paddedFraction = (parts[1] + "00000000").substring(0, 8);
+            fractional = new BigInteger(paddedFraction, 10);
+        }
+        BigInteger amount = whole.multiply(SHANNONS_PER_CKB).add(fractional);
         if (amount.signum() <= 0) {
             throw new IllegalArgumentException("amount must be greater than 0");
         }
@@ -579,6 +601,8 @@ public final class FiberRuntime {
     private static native String nativeListChannels(String paramsJson);
 
     private static native String nativeOpenChannel(String paramsJson);
+
+    private static native String nativeShutdownChannel(String paramsJson);
 
     public interface NativeEventListener {
         void onNativeEvent(String eventJson);

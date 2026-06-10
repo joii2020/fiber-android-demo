@@ -541,9 +541,9 @@ public class MainActivity extends AppCompatActivity {
         form.addView(pubkeyInput, matchWrapParams());
 
         EditText amountInput = new EditText(this);
-        amountInput.setHint("Amount");
+        amountInput.setHint("Amount (CKB)");
         amountInput.setSingleLine(true);
-        amountInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        amountInput.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         form.addView(amountInput, matchWrapParams());
 
         new AlertDialog.Builder(this)
@@ -563,6 +563,22 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(() -> {
                 if (!result.success) {
                     appendLog(result.error);
+                    return;
+                }
+                appendLog(result.value);
+                refreshChannels();
+            });
+        });
+    }
+
+    private void shutdownChannel(String channelId, Button button) {
+        button.setEnabled(false);
+        executor.execute(() -> {
+            FiberRuntime.NativeResult result = FiberRuntime.shutdownChannel(channelId);
+            mainHandler.post(() -> {
+                if (!result.success) {
+                    appendLog(result.error);
+                    button.setEnabled(true);
                     return;
                 }
                 appendLog(result.value);
@@ -651,15 +667,11 @@ public class MainActivity extends AppCompatActivity {
                 empty.setGravity(Gravity.CENTER);
                 list.addView(empty, matchWrapParams());
             } else {
+                list.addView(channelRow("Channel ID", "State Flags", null), matchWrapParams());
                 for (int i = 0; i < channels.length(); i++) {
                     JSONObject channel = channels.getJSONObject(i);
-                    TextView row = labelView("Channel: " + channel.optString("channel_id", "")
-                            + "\nPubKey: " + channel.optString("pubkey", "")
-                            + "\nState: " + channel.optString("state", "")
-                            + "\nLocal: " + channel.optString("local_balance", "")
-                            + "\nRemote: " + channel.optString("remote_balance", ""));
-                    row.setPadding(0, 12, 0, 12);
-                    list.addView(row, matchWrapParams());
+                    String channelId = channel.optString("channel_id", "");
+                    list.addView(channelRow(channelId, stateFlagsLabel(channel), channelId), matchWrapParams());
                 }
             }
         } catch (JSONException exception) {
@@ -671,8 +683,63 @@ public class MainActivity extends AppCompatActivity {
         contentView.addView(scrollView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
+            1f
+        ));
+    }
+
+    private LinearLayout channelRow(String channelId, String stateFlags, String closeChannelId) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 6, 0, 6);
+
+        TextView channelIdView = labelView(channelId);
+        channelIdView.setSingleLine(false);
+        TextView stateFlagsView = labelView(stateFlags);
+        stateFlagsView.setSingleLine(false);
+
+        row.addView(channelIdView, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1.6f
+        ));
+        row.addView(stateFlagsView, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
                 1f
         ));
+
+        if (closeChannelId == null) {
+            TextView actionHeader = labelView("Action");
+            row.addView(actionHeader, new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    0.7f
+            ));
+        } else {
+            Button closeButton = new Button(this);
+            closeButton.setText("Close");
+            closeButton.setAllCaps(false);
+            closeButton.setEnabled(!closeChannelId.isEmpty());
+            closeButton.setOnClickListener(view -> shutdownChannel(closeChannelId, closeButton));
+            row.addView(closeButton, new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    0.7f
+            ));
+        }
+
+        return row;
+    }
+
+    private String stateFlagsLabel(JSONObject channel) {
+        JSONObject state = channel.optJSONObject("state");
+        Object stateFlags = state == null ? channel.opt("state_flags") : state.opt("state_flags");
+        if (stateFlags == null || JSONObject.NULL.equals(stateFlags)) {
+            String stateName = state == null ? channel.optString("state_name", "") : state.optString("state_name", "");
+            return stateName;
+        }
+        return stateFlags.toString();
     }
 
     private void setPeerListError(String errorMessage) {

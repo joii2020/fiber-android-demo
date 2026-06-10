@@ -20,6 +20,7 @@ jclass fiber_runtime_class = nullptr;
 
 using FiberListChannelsFn = FiberFfiStatus (*)(FiberHandle *, const char *, char **);
 using FiberOpenChannelFn = FiberFfiStatus (*)(FiberHandle *, const char *, char **);
+using FiberShutdownChannelFn = FiberFfiStatus (*)(FiberHandle *, const char *);
 
 std::string last_error_message() {
     size_t required = fiber_last_error_message(nullptr, 0);
@@ -297,4 +298,27 @@ Java_com_example_fiberdemo_FiberRuntime_nativeOpenChannel(
     }
     env->ReleaseStringUTFChars(params_json, params_json_chars);
     return to_java_string(env, prefixed_result(result, value, "createChannel"));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_fiberdemo_FiberRuntime_nativeShutdownChannel(
+        JNIEnv *env,
+        jclass,
+        jstring params_json) {
+    std::lock_guard<std::mutex> lock(fiber_mutex);
+    if (fiber_handle == nullptr) {
+        return to_java_string(env, "ERROR\nFiber shutdownChannel failed: node is not running");
+    }
+
+    FiberShutdownChannelFn shutdown_channel =
+            load_fiber_symbol<FiberShutdownChannelFn>("fiber_shutdown_channel");
+    if (shutdown_channel == nullptr) {
+        return to_java_string(env,
+                              "ERROR\nFiber shutdownChannel failed: fiber_ffi does not export fiber_shutdown_channel");
+    }
+
+    const char *params_json_chars = env->GetStringUTFChars(params_json, nullptr);
+    FiberFfiStatus result = shutdown_channel(fiber_handle, params_json_chars);
+    env->ReleaseStringUTFChars(params_json, params_json_chars);
+    return to_java_string(env, prefixed_result(result, "Fiber channel shutdown requested", "shutdownChannel"));
 }
