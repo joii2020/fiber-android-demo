@@ -2,6 +2,7 @@ package com.example.fiberdemo;
 
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.res.Configuration;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
@@ -92,7 +93,7 @@ public class MainActivity extends AppCompatActivity {
 
         logScrollView = new ScrollView(this);
         logScrollView.setFillViewport(true);
-        logScrollView.setBackgroundColor(0xfff2f2f2);
+        applyLogColors();
         logScrollView.addView(logView, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT
@@ -773,6 +774,23 @@ public class MainActivity extends AppCompatActivity {
         String line = logTimeFormat.format(new Date()) + "  " + message + "\n";
         logView.append(line);
         logScrollView.post(() -> logScrollView.fullScroll(View.FOCUS_DOWN));
+    }
+
+    private void applyLogColors() {
+        if (isNightMode()) {
+            logView.setTextColor(0xffffffff);
+            logView.setBackgroundColor(0xff000000);
+            logScrollView.setBackgroundColor(0xff000000);
+            return;
+        }
+        logView.setTextColor(0xff000000);
+        logView.setBackgroundColor(0xfff2f2f2);
+        logScrollView.setBackgroundColor(0xfff2f2f2);
+    }
+
+    private boolean isNightMode() {
+        int nightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        return nightMode == Configuration.UI_MODE_NIGHT_YES;
     }
 
     private TextView labelView(String text) {
