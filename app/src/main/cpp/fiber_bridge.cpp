@@ -1,4 +1,5 @@
 #include <android/log.h>
+#include <dlfcn.h>
 #include <jni.h>
 
 #include <cstdlib>
@@ -16,6 +17,9 @@ std::mutex fiber_mutex;
 FiberHandle *fiber_handle = nullptr;
 JavaVM *java_vm = nullptr;
 jclass fiber_runtime_class = nullptr;
+
+using FiberListChannelsFn = FiberFfiStatus (*)(FiberHandle *, const char *, char **);
+using FiberOpenChannelFn = FiberFfiStatus (*)(FiberHandle *, const char *, char **);
 
 std::string last_error_message() {
     size_t required = fiber_last_error_message(nullptr, 0);
@@ -56,6 +60,11 @@ std::string prefixed_result(FiberFfiStatus status, const std::string &value, con
         return "OK\n" + value;
     }
     return "ERROR\n" + result_message(action, status);
+}
+
+template<typename Fn>
+Fn load_fiber_symbol(const char *name) {
+    return reinterpret_cast<Fn>(dlsym(RTLD_DEFAULT, name));
 }
 
 void emit_native_event(const char *event_json, void *) {
@@ -234,4 +243,58 @@ Java_com_example_fiberdemo_FiberRuntime_nativeConnectPeer(
     }
 
     return to_java_string(env, prefixed_result(result, "Fiber peer connected", "connectPeer"));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_fiberdemo_FiberRuntime_nativeListChannels(
+        JNIEnv *env,
+        jclass,
+        jstring params_json) {
+    std::lock_guard<std::mutex> lock(fiber_mutex);
+    if (fiber_handle == nullptr) {
+        return to_java_string(env, "ERROR\nFiber listChannels failed: node is not running");
+    }
+
+    FiberListChannelsFn list_channels = load_fiber_symbol<FiberListChannelsFn>("fiber_list_channels");
+    if (list_channels == nullptr) {
+        return to_java_string(env, "ERROR\nFiber listChannels failed: fiber_ffi does not export fiber_list_channels");
+    }
+
+    const char *params_json_chars = env->GetStringUTFChars(params_json, nullptr);
+    char *json = nullptr;
+    FiberFfiStatus result = list_channels(fiber_handle, params_json_chars, &json);
+    std::string value;
+    if (result == FIBER_FFI_STATUS_OK && json != nullptr) {
+        value = json;
+        fiber_string_free(json);
+    }
+    env->ReleaseStringUTFChars(params_json, params_json_chars);
+    return to_java_string(env, prefixed_result(result, value, "listChannels"));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_fiberdemo_FiberRuntime_nativeOpenChannel(
+        JNIEnv *env,
+        jclass,
+        jstring params_json) {
+    std::lock_guard<std::mutex> lock(fiber_mutex);
+    if (fiber_handle == nullptr) {
+        return to_java_string(env, "ERROR\nFiber createChannel failed: node is not running");
+    }
+
+    FiberOpenChannelFn open_channel = load_fiber_symbol<FiberOpenChannelFn>("fiber_open_channel");
+    if (open_channel == nullptr) {
+        return to_java_string(env, "ERROR\nFiber createChannel failed: fiber_ffi does not export fiber_open_channel");
+    }
+
+    const char *params_json_chars = env->GetStringUTFChars(params_json, nullptr);
+    char *json = nullptr;
+    FiberFfiStatus result = open_channel(fiber_handle, params_json_chars, &json);
+    std::string value;
+    if (result == FIBER_FFI_STATUS_OK && json != nullptr) {
+        value = json;
+        fiber_string_free(json);
+    }
+    env->ReleaseStringUTFChars(params_json, params_json_chars);
+    return to_java_string(env, prefixed_result(result, value, "createChannel"));
 }

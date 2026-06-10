@@ -1,10 +1,12 @@
 package com.example.fiberdemo;
 
 import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
@@ -41,16 +43,19 @@ public class MainActivity extends AppCompatActivity {
     private TextView logView;
     private ScrollView logScrollView;
     private Button startStopButton;
+    private Button ckbKeyButton;
     private Button nodeInfoButton;
     private Button peersButton;
     private Button channelsButton;
     private TextView addressView;
     private TextView pubkeyView;
+    private String ckbBalanceLabel;
     private Page currentPage = Page.HOME;
 
     private enum Page {
         HOME,
-        PEERS
+        PEERS,
+        CHANNELS
     }
 
     @Override
@@ -117,7 +122,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
-        if (currentPage == Page.PEERS) {
+        if (currentPage == Page.PEERS || currentPage == Page.CHANNELS) {
             showHome();
             return;
         }
@@ -132,6 +137,10 @@ public class MainActivity extends AppCompatActivity {
         buttonRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonRow.setGravity(Gravity.CENTER_VERTICAL);
 
+        ckbKeyButton = new Button(this);
+        ckbKeyButton.setAllCaps(false);
+        ckbKeyButton.setOnClickListener(view -> handleCkbKeyButton());
+
         startStopButton = new Button(this);
         startStopButton.setAllCaps(false);
         startStopButton.setOnClickListener(view -> toggleNode());
@@ -141,6 +150,7 @@ public class MainActivity extends AppCompatActivity {
         nodeInfoButton.setAllCaps(false);
         nodeInfoButton.setOnClickListener(view -> refreshNodeInfo());
 
+        buttonRow.addView(ckbKeyButton, weightedWrapParams(1f));
         buttonRow.addView(startStopButton, weightedWrapParams(1f));
         buttonRow.addView(nodeInfoButton, weightedWrapParams(1f));
         contentView.addView(buttonRow, matchWrapParams());
@@ -162,7 +172,7 @@ public class MainActivity extends AppCompatActivity {
         channelsButton = new Button(this);
         channelsButton.setText("Channels");
         channelsButton.setAllCaps(false);
-        channelsButton.setEnabled(false);
+        channelsButton.setOnClickListener(view -> showChannels());
 
         navRow.addView(peersButton, weightedWrapParams(1f));
         navRow.addView(channelsButton, weightedWrapParams(1f));
@@ -220,7 +230,51 @@ public class MainActivity extends AppCompatActivity {
         refreshPeers();
     }
 
+    private void showChannels() {
+        currentPage = Page.CHANNELS;
+        contentView.removeAllViews();
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        Button backButton = new Button(this);
+        backButton.setText("<");
+        backButton.setAllCaps(false);
+        backButton.setOnClickListener(view -> showHome());
+
+        Button refreshButton = new Button(this);
+        refreshButton.setText("ListChannels");
+        refreshButton.setAllCaps(false);
+        refreshButton.setOnClickListener(view -> refreshChannels());
+
+        Button createButton = new Button(this);
+        createButton.setText("CreateChannel");
+        createButton.setAllCaps(false);
+        createButton.setOnClickListener(view -> showCreateChannelDialog());
+
+        topRow.addView(backButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.45f));
+        topRow.addView(refreshButton, weightedWrapParams(1f));
+        topRow.addView(createButton, weightedWrapParams(1f));
+        contentView.addView(topRow, matchWrapParams());
+
+        TextView placeholder = labelView("No channels loaded");
+        placeholder.setGravity(Gravity.CENTER);
+        contentView.addView(placeholder, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+
+        refreshChannels();
+    }
+
     private void toggleNode() {
+        if (!FiberRuntime.isRunning() && !FiberRuntime.hasCkbKey(this)) {
+            appendLog("Start skipped: CKB private key is not set");
+            showCkbKeyDialog();
+            return;
+        }
         setHomeBusy(true);
         if (FiberRuntime.isRunning()) {
             runFiberCall("stop", FiberRuntime::stop, result -> {
@@ -236,6 +290,142 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }
+    }
+
+    private void handleCkbKeyButton() {
+        if (!FiberRuntime.hasCkbKey(this)) {
+            showCkbKeyDialog();
+            return;
+        }
+        refreshSavedCkbBalance();
+    }
+
+    private void showCkbKeyDialog() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding = getResources().getDimensionPixelSize(R.dimen.screen_padding);
+        form.setPadding(padding, 0, padding, 0);
+
+        EditText keyInput = new EditText(this);
+        keyInput.setHint("Private Key");
+        keyInput.setSingleLine(true);
+        keyInput.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        form.addView(keyInput, matchWrapParams());
+
+        LinearLayout balanceRow = new LinearLayout(this);
+        balanceRow.setOrientation(LinearLayout.HORIZONTAL);
+        balanceRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView accountBalanceView = labelView("Account: \nBalance: ");
+        Button refreshButton = new Button(this);
+        refreshButton.setText("Refresh");
+        refreshButton.setAllCaps(false);
+        refreshButton.setOnClickListener(view -> refreshDialogCkbBalance(
+                keyInput.getText().toString(),
+                accountBalanceView,
+                refreshButton
+        ));
+
+        balanceRow.addView(accountBalanceView, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        ));
+        balanceRow.addView(refreshButton, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+        form.addView(balanceRow, matchWrapParams());
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("CKB Private Key")
+                .setView(form)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Confirm", null)
+                .create();
+        dialog.setOnShowListener(shownDialog -> dialog.getButton(DialogInterface.BUTTON_POSITIVE)
+                .setOnClickListener(view -> confirmCkbPrivateKey(
+                        dialog,
+                        keyInput.getText().toString(),
+                        accountBalanceView
+                )));
+        dialog.show();
+    }
+
+    private void confirmCkbPrivateKey(AlertDialog dialog, String privateKey, TextView statusView) {
+        executor.execute(() -> {
+            try {
+                FiberRuntime.CkbAccount account = FiberRuntime.setCkbPrivateKey(this, privateKey);
+                String balanceLabel = null;
+                String balanceError = null;
+                try {
+                    balanceLabel = FiberRuntime.refreshCkbBalance(account.pubkeyHash).formatted;
+                } catch (Exception exception) {
+                    balanceError = exception.getMessage();
+                }
+                String finalBalanceLabel = balanceLabel;
+                String finalBalanceError = balanceError;
+                mainHandler.post(() -> {
+                    ckbBalanceLabel = finalBalanceLabel;
+                    appendLog("CKB key set: " + account.pubkeyHash);
+                    if (finalBalanceError != null) {
+                        appendLog("CKB balance refresh failed: " + finalBalanceError);
+                    }
+                    updateHomeButtons();
+                    dialog.dismiss();
+                });
+            } catch (Exception exception) {
+                mainHandler.post(() -> {
+                    String message = "CKB key set failed: " + exception.getMessage();
+                    statusView.setText(message);
+                    appendLog(message);
+                });
+            }
+        });
+    }
+
+    private void refreshDialogCkbBalance(String privateKey, TextView statusView, Button refreshButton) {
+        refreshButton.setEnabled(false);
+        statusView.setText("Refreshing...");
+        executor.execute(() -> {
+            try {
+                FiberRuntime.CkbAccount account = FiberRuntime.previewCkbAccount(privateKey);
+                FiberRuntime.CkbBalance balance = FiberRuntime.refreshCkbBalance(account.pubkeyHash);
+                mainHandler.post(() -> {
+                    statusView.setText("Account: " + account.pubkeyHash + "\nBalance: " + balance.formatted);
+                    refreshButton.setEnabled(true);
+                });
+            } catch (Exception exception) {
+                mainHandler.post(() -> {
+                    statusView.setText("Error: " + exception.getMessage());
+                    refreshButton.setEnabled(true);
+                });
+            }
+        });
+    }
+
+    private void refreshSavedCkbBalance() {
+        if (ckbKeyButton != null) {
+            ckbKeyButton.setEnabled(false);
+            ckbKeyButton.setText("Refreshing");
+        }
+        executor.execute(() -> {
+            try {
+                FiberRuntime.CkbBalance balance = FiberRuntime.refreshCkbBalance(this);
+                mainHandler.post(() -> {
+                    ckbBalanceLabel = balance.formatted;
+                    appendLog("CKB balance: " + balance.formatted);
+                    updateHomeButtons();
+                });
+            } catch (Exception exception) {
+                mainHandler.post(() -> {
+                    appendLog("CKB balance refresh failed: " + exception.getMessage());
+                    updateHomeButtons();
+                });
+            }
+        });
     }
 
     private void refreshNodeInfo() {
@@ -270,6 +460,21 @@ public class MainActivity extends AppCompatActivity {
                 }
                 appendLog("ListPeer refreshed");
                 applyPeerList(result.value);
+            });
+        });
+    }
+
+    private void refreshChannels() {
+        executor.execute(() -> {
+            FiberRuntime.NativeResult result = FiberRuntime.listChannels();
+            mainHandler.post(() -> {
+                if (!result.success) {
+                    appendLog(result.error);
+                    setChannelListError(result.error);
+                    return;
+                }
+                appendLog("ListChannels refreshed");
+                applyChannelList(result.value);
             });
         });
     }
@@ -319,6 +524,48 @@ public class MainActivity extends AppCompatActivity {
                 }
                 appendLog(result.value);
                 refreshPeers();
+            });
+        });
+    }
+
+    private void showCreateChannelDialog() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding = getResources().getDimensionPixelSize(R.dimen.screen_padding);
+        form.setPadding(padding, 0, padding, 0);
+
+        EditText pubkeyInput = new EditText(this);
+        pubkeyInput.setHint("PubKey");
+        pubkeyInput.setSingleLine(true);
+        form.addView(pubkeyInput, matchWrapParams());
+
+        EditText amountInput = new EditText(this);
+        amountInput.setHint("Amount");
+        amountInput.setSingleLine(true);
+        amountInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        form.addView(amountInput, matchWrapParams());
+
+        new AlertDialog.Builder(this)
+                .setTitle("Create Channel")
+                .setView(form)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Create", (dialog, which) -> createChannel(
+                        pubkeyInput.getText().toString(),
+                        amountInput.getText().toString()
+                ))
+                .show();
+    }
+
+    private void createChannel(String pubkey, String amount) {
+        executor.execute(() -> {
+            FiberRuntime.NativeResult result = FiberRuntime.createChannel(pubkey, amount);
+            mainHandler.post(() -> {
+                if (!result.success) {
+                    appendLog(result.error);
+                    return;
+                }
+                appendLog(result.value);
+                refreshChannels();
             });
         });
     }
@@ -381,11 +628,71 @@ public class MainActivity extends AppCompatActivity {
         ));
     }
 
+    private void applyChannelList(String json) {
+        if (currentPage != Page.CHANNELS) {
+            return;
+        }
+
+        removePageContent();
+
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scrollView.addView(list, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT
+        ));
+
+        try {
+            JSONArray channels = new JSONObject(json).optJSONArray("channels");
+            if (channels == null || channels.length() == 0) {
+                TextView empty = labelView("No channels");
+                empty.setGravity(Gravity.CENTER);
+                list.addView(empty, matchWrapParams());
+            } else {
+                for (int i = 0; i < channels.length(); i++) {
+                    JSONObject channel = channels.getJSONObject(i);
+                    TextView row = labelView("Channel: " + channel.optString("channel_id", "")
+                            + "\nPubKey: " + channel.optString("pubkey", "")
+                            + "\nState: " + channel.optString("state", "")
+                            + "\nLocal: " + channel.optString("local_balance", "")
+                            + "\nRemote: " + channel.optString("remote_balance", ""));
+                    row.setPadding(0, 12, 0, 12);
+                    list.addView(row, matchWrapParams());
+                }
+            }
+        } catch (JSONException exception) {
+            TextView error = labelView("Channel list parse failed: " + exception.getMessage());
+            list.addView(error, matchWrapParams());
+            appendLog(error.getText().toString());
+        }
+
+        contentView.addView(scrollView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+    }
+
     private void setPeerListError(String errorMessage) {
         if (currentPage != Page.PEERS) {
             return;
         }
-        removePeerContent();
+        removePageContent();
+        TextView error = labelView(errorMessage);
+        error.setGravity(Gravity.CENTER);
+        contentView.addView(error, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+    }
+
+    private void setChannelListError(String errorMessage) {
+        if (currentPage != Page.CHANNELS) {
+            return;
+        }
+        removePageContent();
         TextView error = labelView(errorMessage);
         error.setGravity(Gravity.CENTER);
         contentView.addView(error, new LinearLayout.LayoutParams(
@@ -407,6 +714,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void removePeerContent() {
+        removePageContent();
+    }
+
+    private void removePageContent() {
         int childCount = contentView.getChildCount();
         if (childCount > 1) {
             contentView.removeViews(1, childCount - 1);
@@ -415,9 +726,16 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateHomeButtons() {
         boolean running = FiberRuntime.isRunning();
+        boolean hasCkbKey = FiberRuntime.hasCkbKey(this);
+        if (ckbKeyButton != null) {
+            ckbKeyButton.setText(hasCkbKey
+                    ? (ckbBalanceLabel == null ? "Refresh CKB" : ckbBalanceLabel)
+                    : "SetCKBKey");
+            ckbKeyButton.setEnabled(true);
+        }
         if (startStopButton != null) {
             startStopButton.setText(running ? R.string.fiber_stop : R.string.fiber_start);
-            startStopButton.setEnabled(true);
+            startStopButton.setEnabled(running || hasCkbKey);
         }
         if (nodeInfoButton != null) {
             nodeInfoButton.setEnabled(running);
@@ -426,19 +744,25 @@ public class MainActivity extends AppCompatActivity {
             peersButton.setEnabled(running);
         }
         if (channelsButton != null) {
-            channelsButton.setEnabled(false);
+            channelsButton.setEnabled(running);
         }
     }
 
     private void setHomeBusy(boolean busy) {
+        if (ckbKeyButton != null) {
+            ckbKeyButton.setEnabled(!busy);
+        }
         if (startStopButton != null) {
-            startStopButton.setEnabled(!busy);
+            startStopButton.setEnabled(!busy && (FiberRuntime.isRunning() || FiberRuntime.hasCkbKey(this)));
         }
         if (nodeInfoButton != null) {
             nodeInfoButton.setEnabled(!busy && FiberRuntime.isRunning());
         }
         if (peersButton != null) {
             peersButton.setEnabled(!busy && FiberRuntime.isRunning());
+        }
+        if (channelsButton != null) {
+            channelsButton.setEnabled(!busy && FiberRuntime.isRunning());
         }
     }
 
