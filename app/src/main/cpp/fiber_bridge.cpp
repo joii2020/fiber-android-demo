@@ -21,6 +21,8 @@ jclass fiber_runtime_class = nullptr;
 using FiberListChannelsFn = FiberFfiStatus (*)(FiberHandle *, const char *, char **);
 using FiberOpenChannelFn = FiberFfiStatus (*)(FiberHandle *, const char *, char **);
 using FiberShutdownChannelFn = FiberFfiStatus (*)(FiberHandle *, const char *);
+using FiberNewInvoiceFn = FiberFfiStatus (*)(FiberHandle *, const char *, char **);
+using FiberSendPaymentFn = FiberFfiStatus (*)(FiberHandle *, const char *, char **);
 
 std::string last_error_message() {
     size_t required = fiber_last_error_message(nullptr, 0);
@@ -167,10 +169,6 @@ Java_com_example_fiberdemo_FiberRuntime_nativeStop(JNIEnv *env, jclass) {
     fiber_handle = nullptr;
 
     FiberFfiStatus result = fiber_stop(handle_to_stop);
-    if (result != FIBER_FFI_STATUS_OK) {
-        fiber_handle = handle_to_stop;
-    }
-
     return to_java_string(env, result_message("stopped", result));
 }
 
@@ -321,4 +319,58 @@ Java_com_example_fiberdemo_FiberRuntime_nativeShutdownChannel(
     FiberFfiStatus result = shutdown_channel(fiber_handle, params_json_chars);
     env->ReleaseStringUTFChars(params_json, params_json_chars);
     return to_java_string(env, prefixed_result(result, "Fiber channel shutdown requested", "shutdownChannel"));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_fiberdemo_FiberRuntime_nativeNewInvoice(
+        JNIEnv *env,
+        jclass,
+        jstring params_json) {
+    std::lock_guard<std::mutex> lock(fiber_mutex);
+    if (fiber_handle == nullptr) {
+        return to_java_string(env, "ERROR\nFiber newInvoice failed: node is not running");
+    }
+
+    FiberNewInvoiceFn new_invoice = load_fiber_symbol<FiberNewInvoiceFn>("fiber_new_invoice");
+    if (new_invoice == nullptr) {
+        return to_java_string(env, "ERROR\nFiber newInvoice failed: fiber_ffi does not export fiber_new_invoice");
+    }
+
+    const char *params_json_chars = env->GetStringUTFChars(params_json, nullptr);
+    char *json = nullptr;
+    FiberFfiStatus result = new_invoice(fiber_handle, params_json_chars, &json);
+    std::string value;
+    if (result == FIBER_FFI_STATUS_OK && json != nullptr) {
+        value = json;
+        fiber_string_free(json);
+    }
+    env->ReleaseStringUTFChars(params_json, params_json_chars);
+    return to_java_string(env, prefixed_result(result, value, "newInvoice"));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_fiberdemo_FiberRuntime_nativeSendPayment(
+        JNIEnv *env,
+        jclass,
+        jstring params_json) {
+    std::lock_guard<std::mutex> lock(fiber_mutex);
+    if (fiber_handle == nullptr) {
+        return to_java_string(env, "ERROR\nFiber sendPayment failed: node is not running");
+    }
+
+    FiberSendPaymentFn send_payment = load_fiber_symbol<FiberSendPaymentFn>("fiber_send_payment");
+    if (send_payment == nullptr) {
+        return to_java_string(env, "ERROR\nFiber sendPayment failed: fiber_ffi does not export fiber_send_payment");
+    }
+
+    const char *params_json_chars = env->GetStringUTFChars(params_json, nullptr);
+    char *json = nullptr;
+    FiberFfiStatus result = send_payment(fiber_handle, params_json_chars, &json);
+    std::string value;
+    if (result == FIBER_FFI_STATUS_OK && json != nullptr) {
+        value = json;
+        fiber_string_free(json);
+    }
+    env->ReleaseStringUTFChars(params_json, params_json_chars);
+    return to_java_string(env, prefixed_result(result, value, "sendPayment"));
 }

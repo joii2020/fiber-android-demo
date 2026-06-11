@@ -27,6 +27,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.math.BigInteger;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -34,6 +35,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
+    private static final BigInteger SHANNONS_PER_CKB = BigInteger.valueOf(100_000_000L);
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final SimpleDateFormat logTimeFormat = new SimpleDateFormat("HH:mm:ss", Locale.US);
@@ -47,7 +50,9 @@ public class MainActivity extends AppCompatActivity {
     private Button ckbKeyButton;
     private Button nodeInfoButton;
     private Button peersButton;
+    private Button invoiceButton;
     private Button channelsButton;
+    private TextView invoiceResultView;
     private TextView addressView;
     private TextView pubkeyView;
     private String ckbBalanceLabel;
@@ -56,6 +61,7 @@ public class MainActivity extends AppCompatActivity {
     private enum Page {
         HOME,
         PEERS,
+        INVOICE,
         CHANNELS
     }
 
@@ -122,8 +128,20 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (FiberRuntime.isRunning()) {
+            FiberNodeService.ensureStarted(this);
+            if (currentPage == Page.HOME && addressView != null && pubkeyView != null) {
+                refreshNodeInfo();
+            }
+        }
+        updateHomeButtons();
+    }
+
+    @Override
     public void onBackPressed() {
-        if (currentPage == Page.PEERS || currentPage == Page.CHANNELS) {
+        if (currentPage == Page.PEERS || currentPage == Page.INVOICE || currentPage == Page.CHANNELS) {
             showHome();
             return;
         }
@@ -163,20 +181,34 @@ public class MainActivity extends AppCompatActivity {
 
         LinearLayout navRow = new LinearLayout(this);
         navRow.setOrientation(LinearLayout.HORIZONTAL);
-        navRow.setGravity(Gravity.CENTER_VERTICAL);
+        navRow.setGravity(Gravity.TOP);
+
+        LinearLayout leftNavColumn = new LinearLayout(this);
+        leftNavColumn.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout rightNavColumn = new LinearLayout(this);
+        rightNavColumn.setOrientation(LinearLayout.VERTICAL);
 
         peersButton = new Button(this);
         peersButton.setText("Peers");
         peersButton.setAllCaps(false);
         peersButton.setOnClickListener(view -> showPeers());
 
+        invoiceButton = new Button(this);
+        invoiceButton.setText("Invoice");
+        invoiceButton.setAllCaps(false);
+        invoiceButton.setOnClickListener(view -> showInvoice());
+
         channelsButton = new Button(this);
         channelsButton.setText("Channels");
         channelsButton.setAllCaps(false);
         channelsButton.setOnClickListener(view -> showChannels());
 
-        navRow.addView(peersButton, weightedWrapParams(1f));
-        navRow.addView(channelsButton, weightedWrapParams(1f));
+        leftNavColumn.addView(peersButton, matchWrapParams());
+        leftNavColumn.addView(invoiceButton, matchWrapParams());
+        rightNavColumn.addView(channelsButton, matchWrapParams());
+        navRow.addView(leftNavColumn, weightedWrapParams(1f));
+        navRow.addView(rightNavColumn, weightedWrapParams(1f));
         contentView.addView(navRow, matchWrapParams());
 
         View spacer = new View(this);
@@ -231,6 +263,43 @@ public class MainActivity extends AppCompatActivity {
         refreshPeers();
     }
 
+    private void showInvoice() {
+        currentPage = Page.INVOICE;
+        contentView.removeAllViews();
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        Button backButton = new Button(this);
+        backButton.setText("<");
+        backButton.setAllCaps(false);
+        backButton.setOnClickListener(view -> showHome());
+
+        Button newInvoiceButton = new Button(this);
+        newInvoiceButton.setText("New Invoice");
+        newInvoiceButton.setAllCaps(false);
+        newInvoiceButton.setOnClickListener(view -> showNewInvoiceDialog());
+
+        Button sendPaymentButton = new Button(this);
+        sendPaymentButton.setText("fiber_send_payment");
+        sendPaymentButton.setAllCaps(false);
+        sendPaymentButton.setOnClickListener(view -> showSendPaymentDialog());
+
+        topRow.addView(backButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.45f));
+        topRow.addView(newInvoiceButton, weightedWrapParams(1f));
+        topRow.addView(sendPaymentButton, weightedWrapParams(1.25f));
+        contentView.addView(topRow, matchWrapParams());
+
+        invoiceResultView = labelView("No invoice generated");
+        invoiceResultView.setGravity(Gravity.START);
+        contentView.addView(invoiceResultView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+    }
+
     private void showChannels() {
         currentPage = Page.CHANNELS;
         contentView.removeAllViews();
@@ -279,6 +348,7 @@ public class MainActivity extends AppCompatActivity {
         setHomeBusy(true);
         if (FiberRuntime.isRunning()) {
             runFiberCall("stop", FiberRuntime::stop, result -> {
+                FiberNodeService.ensureStopped(this);
                 appendLog(result);
                 updateHomeButtons();
             });
@@ -287,6 +357,7 @@ public class MainActivity extends AppCompatActivity {
                 appendLog(result);
                 updateHomeButtons();
                 if (FiberRuntime.isRunning()) {
+                    FiberNodeService.ensureStarted(this);
                     refreshNodeInfo();
                 }
             });
@@ -529,6 +600,84 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void showNewInvoiceDialog() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding = getResources().getDimensionPixelSize(R.dimen.screen_padding);
+        form.setPadding(padding, 0, padding, 0);
+
+        EditText amountInput = new EditText(this);
+        amountInput.setHint("Amount (shannons)");
+        amountInput.setSingleLine(true);
+        amountInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        form.addView(amountInput, matchWrapParams());
+
+        EditText descriptionInput = new EditText(this);
+        descriptionInput.setHint("Description");
+        descriptionInput.setSingleLine(true);
+        form.addView(descriptionInput, matchWrapParams());
+
+        new AlertDialog.Builder(this)
+                .setTitle("New Invoice")
+                .setView(form)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Create", (dialog, which) -> newInvoice(
+                        amountInput.getText().toString(),
+                        descriptionInput.getText().toString()
+                ))
+                .show();
+    }
+
+    private void newInvoice(String amount, String description) {
+        executor.execute(() -> {
+            FiberRuntime.NativeResult result = FiberRuntime.newInvoice(amount, description);
+            mainHandler.post(() -> {
+                if (!result.success) {
+                    appendLog(result.error);
+                    setInvoiceResult(result.error);
+                    return;
+                }
+                appendLog("New Invoice generated");
+                setInvoiceResult(result.value);
+            });
+        });
+    }
+
+    private void showSendPaymentDialog() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding = getResources().getDimensionPixelSize(R.dimen.screen_padding);
+        form.setPadding(padding, 0, padding, 0);
+
+        EditText invoiceInput = new EditText(this);
+        invoiceInput.setHint("Invoice");
+        invoiceInput.setSingleLine(false);
+        invoiceInput.setMinLines(3);
+        form.addView(invoiceInput, matchWrapParams());
+
+        new AlertDialog.Builder(this)
+                .setTitle("fiber_send_payment")
+                .setView(form)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Send", (dialog, which) -> sendPayment(
+                        invoiceInput.getText().toString()
+                ))
+                .show();
+    }
+
+    private void sendPayment(String invoice) {
+        executor.execute(() -> {
+            FiberRuntime.NativeResult result = FiberRuntime.sendPayment(invoice);
+            mainHandler.post(() -> {
+                if (!result.success) {
+                    appendLog(result.error);
+                    return;
+                }
+                appendLog(result.value);
+            });
+        });
+    }
+
     private void showCreateChannelDialog() {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
@@ -667,11 +816,16 @@ public class MainActivity extends AppCompatActivity {
                 empty.setGravity(Gravity.CENTER);
                 list.addView(empty, matchWrapParams());
             } else {
-                list.addView(channelRow("Channel ID", "State Flags", null), matchWrapParams());
+                list.addView(channelRow("Channel ID", "Balance", "State Flags", null), matchWrapParams());
                 for (int i = 0; i < channels.length(); i++) {
                     JSONObject channel = channels.getJSONObject(i);
                     String channelId = channel.optString("channel_id", "");
-                    list.addView(channelRow(channelId, stateFlagsLabel(channel), channelId), matchWrapParams());
+                    list.addView(channelRow(
+                            channelId,
+                            channelBalanceLabel(channel),
+                            stateFlagsLabel(channel),
+                            channelId
+                    ), matchWrapParams());
                 }
             }
         } catch (JSONException exception) {
@@ -687,7 +841,7 @@ public class MainActivity extends AppCompatActivity {
         ));
     }
 
-    private LinearLayout channelRow(String channelId, String stateFlags, String closeChannelId) {
+    private LinearLayout channelRow(String channelId, String balance, String stateFlags, String closeChannelId) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -695,18 +849,25 @@ public class MainActivity extends AppCompatActivity {
 
         TextView channelIdView = labelView(channelId);
         channelIdView.setSingleLine(false);
+        TextView balanceView = labelView(balance);
+        balanceView.setSingleLine(false);
         TextView stateFlagsView = labelView(stateFlags);
         stateFlagsView.setSingleLine(false);
 
         row.addView(channelIdView, new LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                1.6f
+                1.35f
+        ));
+        row.addView(balanceView, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                0.95f
         ));
         row.addView(stateFlagsView, new LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
+                0.85f
         ));
 
         if (closeChannelId == null) {
@@ -730,6 +891,35 @@ public class MainActivity extends AppCompatActivity {
         }
 
         return row;
+    }
+
+    private String channelBalanceLabel(JSONObject channel) {
+        String localBalance = channel.optString("local_balance", "");
+        if (localBalance.isEmpty()) {
+            return "";
+        }
+        if (!channel.isNull("funding_udt_type_script")) {
+            return localBalance;
+        }
+        try {
+            return formatCkb(hexQuantityToBigInteger(localBalance));
+        } catch (NumberFormatException exception) {
+            return localBalance;
+        }
+    }
+
+    private BigInteger hexQuantityToBigInteger(String value) {
+        String hex = value.startsWith("0x") || value.startsWith("0X") ? value.substring(2) : value;
+        if (hex.isEmpty()) {
+            return BigInteger.ZERO;
+        }
+        return new BigInteger(hex, 16);
+    }
+
+    private String formatCkb(BigInteger shannons) {
+        BigInteger[] parts = shannons.divideAndRemainder(SHANNONS_PER_CKB);
+        BigInteger tenth = parts[1].multiply(BigInteger.TEN).divide(SHANNONS_PER_CKB);
+        return parts[0] + "." + tenth + " CKB";
     }
 
     private String stateFlagsLabel(JSONObject channel) {
@@ -792,6 +982,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void setInvoiceResult(String text) {
+        if (currentPage == Page.INVOICE && invoiceResultView != null) {
+            invoiceResultView.setText(text);
+        }
+    }
+
     private void updateHomeButtons() {
         boolean running = FiberRuntime.isRunning();
         boolean hasCkbKey = FiberRuntime.hasCkbKey(this);
@@ -811,6 +1007,9 @@ public class MainActivity extends AppCompatActivity {
         if (peersButton != null) {
             peersButton.setEnabled(running);
         }
+        if (invoiceButton != null) {
+            invoiceButton.setEnabled(running);
+        }
         if (channelsButton != null) {
             channelsButton.setEnabled(running);
         }
@@ -828,6 +1027,9 @@ public class MainActivity extends AppCompatActivity {
         }
         if (peersButton != null) {
             peersButton.setEnabled(!busy && FiberRuntime.isRunning());
+        }
+        if (invoiceButton != null) {
+            invoiceButton.setEnabled(!busy && FiberRuntime.isRunning());
         }
         if (channelsButton != null) {
             channelsButton.setEnabled(!busy && FiberRuntime.isRunning());

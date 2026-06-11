@@ -102,7 +102,7 @@ public final class FiberRuntime {
         }
 
         String result = nativeStop();
-        running = !(result.startsWith("Fiber stopped") || result.equals("Fiber already stopped"));
+        running = false;
         return result;
     }
 
@@ -111,7 +111,7 @@ public final class FiberRuntime {
         if (loadError != null) {
             return NativeResult.error(loadError);
         }
-        return NativeResult.fromPrefixed(nativeNodeInfo());
+        return fromNativeCall(nativeNodeInfo());
     }
 
     public static synchronized NativeResult listPeers() {
@@ -119,7 +119,7 @@ public final class FiberRuntime {
         if (loadError != null) {
             return NativeResult.error(loadError);
         }
-        return NativeResult.fromPrefixed(nativeListPeers());
+        return fromNativeCall(nativeListPeers());
     }
 
     public static synchronized NativeResult connectPeer(
@@ -132,7 +132,7 @@ public final class FiberRuntime {
         if (loadError != null) {
             return NativeResult.error(loadError);
         }
-        return NativeResult.fromPrefixed(nativeConnectPeer(
+        return fromNativeCall(nativeConnectPeer(
                 emptyToNull(address),
                 emptyToNull(pubkey),
                 emptyToNull(addrType),
@@ -145,7 +145,7 @@ public final class FiberRuntime {
         if (loadError != null) {
             return NativeResult.error(loadError);
         }
-        return NativeResult.fromPrefixed(nativeListChannels("{}"));
+        return fromNativeCall(nativeListChannels("{}"));
     }
 
     public static synchronized NativeResult createChannel(String pubkey, String amount) {
@@ -157,7 +157,7 @@ public final class FiberRuntime {
             JSONObject params = new JSONObject()
                     .put("pubkey", requireTrimmed(pubkey, "pubkey"))
                     .put("funding_amount", ckbAmountToShannonsHex(amount));
-            return NativeResult.fromPrefixed(nativeOpenChannel(params.toString()));
+            return fromNativeCall(nativeOpenChannel(params.toString()));
         } catch (JSONException | IllegalArgumentException exception) {
             return NativeResult.error("Fiber createChannel failed: " + exception.getMessage());
         }
@@ -172,9 +172,42 @@ public final class FiberRuntime {
             JSONObject params = new JSONObject()
                     .put("channel_id", requireTrimmed(channelId, "channel_id"))
                     .put("force", true);
-            return NativeResult.fromPrefixed(nativeShutdownChannel(params.toString()));
+            return fromNativeCall(nativeShutdownChannel(params.toString()));
         } catch (JSONException | IllegalArgumentException exception) {
             return NativeResult.error("Fiber shutdownChannel failed: " + exception.getMessage());
+        }
+    }
+
+    public static synchronized NativeResult newInvoice(String amount, String description) {
+        String loadError = ensureNativeLibrariesLoaded();
+        if (loadError != null) {
+            return NativeResult.error(loadError);
+        }
+        try {
+            JSONObject params = new JSONObject()
+                    .put("amount", shannonsAmountToHex(amount))
+                    .put("currency", "Fibd");
+            String trimmedDescription = emptyToNull(description);
+            if (trimmedDescription != null) {
+                params.put("description", trimmedDescription);
+            }
+            return fromNativeCall(nativeNewInvoice(params.toString()));
+        } catch (JSONException | IllegalArgumentException exception) {
+            return NativeResult.error("Fiber newInvoice failed: " + exception.getMessage());
+        }
+    }
+
+    public static synchronized NativeResult sendPayment(String invoice) {
+        String loadError = ensureNativeLibrariesLoaded();
+        if (loadError != null) {
+            return NativeResult.error(loadError);
+        }
+        try {
+            JSONObject params = new JSONObject()
+                    .put("invoice", requireTrimmed(invoice, "invoice"));
+            return fromNativeCall(nativeSendPayment(params.toString()));
+        } catch (JSONException | IllegalArgumentException exception) {
+            return NativeResult.error("Fiber sendPayment failed: " + exception.getMessage());
         }
     }
 
@@ -563,10 +596,33 @@ public final class FiberRuntime {
         return "0x" + amount.toString(16);
     }
 
+    private static String shannonsAmountToHex(String value) {
+        String trimmed = requireTrimmed(value, "amount");
+        if (!trimmed.matches("[0-9]+")) {
+            throw new IllegalArgumentException("amount must be an integer shannons amount");
+        }
+        BigInteger amount = new BigInteger(trimmed, 10);
+        if (amount.signum() <= 0) {
+            throw new IllegalArgumentException("amount must be greater than 0");
+        }
+        if (amount.bitLength() > 128) {
+            throw new IllegalArgumentException("amount exceeds u128");
+        }
+        return "0x" + amount.toString(16);
+    }
+
     private static void onNativeEvent(String eventJson) {
         for (NativeEventListener listener : nativeEventListeners) {
             listener.onNativeEvent(eventJson);
         }
+    }
+
+    private static NativeResult fromNativeCall(String value) {
+        NativeResult result = NativeResult.fromPrefixed(value);
+        if (!result.success && result.error != null && result.error.contains("node is not running")) {
+            running = false;
+        }
+        return result;
     }
 
     private static String ensureNativeLibrariesLoaded() {
@@ -603,6 +659,10 @@ public final class FiberRuntime {
     private static native String nativeOpenChannel(String paramsJson);
 
     private static native String nativeShutdownChannel(String paramsJson);
+
+    private static native String nativeNewInvoice(String paramsJson);
+
+    private static native String nativeSendPayment(String paramsJson);
 
     public interface NativeEventListener {
         void onNativeEvent(String eventJson);
