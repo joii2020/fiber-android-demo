@@ -145,7 +145,7 @@ public final class FiberRuntime {
         if (loadError != null) {
             return NativeResult.error(loadError);
         }
-        return fromNativeCall(nativeListChannels("{}"));
+        return fromNativeCall(nativeListChannels());
     }
 
     public static synchronized NativeResult createChannel(String pubkey, String amount) {
@@ -154,11 +154,11 @@ public final class FiberRuntime {
             return NativeResult.error(loadError);
         }
         try {
-            JSONObject params = new JSONObject()
-                    .put("pubkey", requireTrimmed(pubkey, "pubkey"))
-                    .put("funding_amount", ckbAmountToShannonsHex(amount));
-            return fromNativeCall(nativeOpenChannel(params.toString()));
-        } catch (JSONException | IllegalArgumentException exception) {
+            return fromNativeCall(nativeOpenChannel(
+                    requireTrimmed(pubkey, "pubkey"),
+                    ckbAmountToShannonsHex(amount)
+            ));
+        } catch (IllegalArgumentException exception) {
             return NativeResult.error("Fiber createChannel failed: " + exception.getMessage());
         }
     }
@@ -169,11 +169,8 @@ public final class FiberRuntime {
             return NativeResult.error(loadError);
         }
         try {
-            JSONObject params = new JSONObject()
-                    .put("channel_id", requireTrimmed(channelId, "channel_id"))
-                    .put("force", true);
-            return fromNativeCall(nativeShutdownChannel(params.toString()));
-        } catch (JSONException | IllegalArgumentException exception) {
+            return fromNativeCall(nativeShutdownChannel(requireTrimmed(channelId, "channel_id"), true));
+        } catch (IllegalArgumentException exception) {
             return NativeResult.error("Fiber shutdownChannel failed: " + exception.getMessage());
         }
     }
@@ -184,15 +181,8 @@ public final class FiberRuntime {
             return NativeResult.error(loadError);
         }
         try {
-            JSONObject params = new JSONObject()
-                    .put("amount", shannonsAmountToHex(amount))
-                    .put("currency", "Fibd");
-            String trimmedDescription = emptyToNull(description);
-            if (trimmedDescription != null) {
-                params.put("description", trimmedDescription);
-            }
-            return fromNativeCall(nativeNewInvoice(params.toString()));
-        } catch (JSONException | IllegalArgumentException exception) {
+            return fromNativeCall(nativeNewInvoice(shannonsAmountToHex(amount), emptyToNull(description)));
+        } catch (IllegalArgumentException exception) {
             return NativeResult.error("Fiber newInvoice failed: " + exception.getMessage());
         }
     }
@@ -203,10 +193,8 @@ public final class FiberRuntime {
             return NativeResult.error(loadError);
         }
         try {
-            JSONObject params = new JSONObject()
-                    .put("invoice", requireTrimmed(invoice, "invoice"));
-            return fromNativeCall(nativeSendPayment(params.toString()));
-        } catch (JSONException | IllegalArgumentException exception) {
+            return fromNativeCall(nativeSendPayment(requireTrimmed(invoice, "invoice")));
+        } catch (IllegalArgumentException exception) {
             return NativeResult.error("Fiber sendPayment failed: " + exception.getMessage());
         }
     }
@@ -654,15 +642,15 @@ public final class FiberRuntime {
 
     private static native String nativeConnectPeer(String address, String pubkey, String addrType, boolean save);
 
-    private static native String nativeListChannels(String paramsJson);
+    private static native String nativeListChannels();
 
-    private static native String nativeOpenChannel(String paramsJson);
+    private static native String nativeOpenChannel(String pubkey, String fundingAmountHex);
 
-    private static native String nativeShutdownChannel(String paramsJson);
+    private static native String nativeShutdownChannel(String channelId, boolean force);
 
-    private static native String nativeNewInvoice(String paramsJson);
+    private static native String nativeNewInvoice(String amountHex, String description);
 
-    private static native String nativeSendPayment(String paramsJson);
+    private static native String nativeSendPayment(String invoice);
 
     public interface NativeEventListener {
         void onNativeEvent(String eventJson);
